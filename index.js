@@ -2,7 +2,7 @@
   if (window.__movysxTVInitialized) return;
   window.__movysxTVInitialized = true;
 
-  // 1. Block ad popups / new tab redirects
+  // 1. Block ad popups
   window.open = function () {
     console.log('[MovyTV] Blocked popup');
     return null;
@@ -29,14 +29,13 @@
   var currentEl = null;
   var lastBackPress = 0;
 
-  // Video Seeking Variables
+  // Seeking & Save Data
   var activeKey = null;
   var seekTimer = null;
   var seekLoop = null;
   var seekData = { active: false, speed: 1, direction: 1, video: null };
   var restoredVideos = new WeakMap();
 
-  // 3. Helper to find the video element, even inside iframes
   function getActiveVideo() {
     var v = document.querySelector('video');
     if (v) return v;
@@ -57,20 +56,15 @@
     return (rect.height > window.innerHeight * 0.4);
   }
 
-  // Auto-Resume System
+  // Auto-Resume Progress
   function getVideoKey() {
-    try {
-      return 'movytv_time_' + window.top.location.pathname;
-    } catch (e) {
-      return 'movytv_time_' + window.location.pathname;
-    }
+    try { return 'movytv_time_' + window.top.location.pathname; } 
+    catch (e) { return 'movytv_time_' + window.location.pathname; }
   }
 
   function handleVideoResumeAndSave(vid) {
     if (!vid) return;
     var key = getVideoKey();
-
-    // Check if we need to restore
     if (!restoredVideos.has(vid)) {
       restoredVideos.set(vid, true);
       try {
@@ -78,29 +72,21 @@
         if (saved) {
           var t = parseFloat(saved);
           if (t > 15) {
-            var attemptRestore = function() {
-              if (vid.duration && t < vid.duration - 30) {
-                vid.currentTime = t;
-              }
-            };
+            var attemptRestore = function() { if (vid.duration && t < vid.duration - 30) vid.currentTime = t; };
             if (vid.readyState >= 1) attemptRestore();
             else vid.addEventListener('loadedmetadata', attemptRestore);
           }
         }
       } catch (e) {}
     }
-
-    // Save current progress
     try {
       if (!vid.paused && vid.currentTime > 15) {
-        if (!vid.duration || vid.currentTime < vid.duration - 30) {
-          localStorage.setItem(key, vid.currentTime);
-        }
+        if (!vid.duration || vid.currentTime < vid.duration - 30) localStorage.setItem(key, vid.currentTime);
       }
     } catch (e) {}
   }
 
-  // 4. Smooth Fast-Forward Engine
+  // Smooth Fast-Forward Engine
   function startSeek() {
     if (!seekData.video) return;
     seekData.active = true;
@@ -123,10 +109,10 @@
     seekData.speed = 1;
   }
 
-  // 5. Find focusable elements (Added episode, nav, and generic button classes)
+  // Find focusable elements (Now includes deep streaming player menu items)
   function getFocusableElements() {
     var candidates = document.querySelectorAll(
-      'a[href], button, input, select, [role="button"], [tabindex]:not([tabindex="-1"]), .film-poster, .movie-item, .btn, .nav-link, .nav-item, .episode-item, .ep-item, .ss-item, [data-toggle], [data-id], .plyr__control, .jw-button, .vjs-button, .vjs-control'
+      'a[href], button, input, select, [role="button"], [tabindex]:not([tabindex="-1"]), .film-poster, .movie-item, .btn, .nav-link, .nav-item, .episode-item, .ep-item, .ss-item, [data-toggle], [data-id], .plyr__control, .jw-button, .vjs-button, .vjs-control, li, [role="menuitem"], [role="menuitemradio"], .jw-settings-content-item, .jw-radio'
     );
     var visible = [];
     for (var i = 0; i < candidates.length; i++) {
@@ -148,7 +134,7 @@
     currentEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
   }
 
-  // 6. Spatial navigation math (Adjusted multiplier to make reaching bottom-middle easier)
+  // Restored stable spatial navigation math
   function moveFocus(direction) {
     var elements = getFocusableElements();
     if (!elements.length) return;
@@ -179,14 +165,13 @@
 
       if (!inDirection) continue;
       
-      // Reduced secondary multiplier from 2.5 to 1.2 so it doesn't overly penalize diagonal items (like bottom middle buttons)
-      var score = primaryDist + secondaryDist * 1.2;
+      var score = primaryDist + secondaryDist * 1.5;
       if (score < bestScore) { bestScore = score; bestEl = targetEl; }
     }
     if (bestEl) setFocus(bestEl);
   }
 
-  // 7. Input Handlers
+  // Input Handlers
   function keydownHandler(e) {
     var code = e.keyCode;
 
@@ -195,16 +180,15 @@
       if (rect.width === 0 || rect.height === 0 || currentEl.offsetParent === null) {
         currentEl.classList.remove('movitv-focused');
         currentEl = null;
-      } else if (document.fullscreenElement && !document.fullscreenElement.contains(currentEl)) {
-        currentEl.classList.remove('movitv-focused');
-        currentEl = null;
       }
     }
 
     if (code === 37 || code === 39) {
       var video = getActiveVideo();
+      // True if the red focus ring is currently highlighting ANY menu item or button
       var isUIFocused = currentEl && currentEl.tagName.toLowerCase() !== 'video' && currentEl.tagName.toLowerCase() !== 'body';
       
+      // ONLY seek if watching video AND no UI elements are focused
       if (isVideoFocusMode(video) && !isUIFocused) {
         e.preventDefault();
         e.stopPropagation();
@@ -220,6 +204,7 @@
         return; 
       }
 
+      // Otherwise, navigate UI
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -245,11 +230,18 @@
         var escEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true });
         document.dispatchEvent(escEvent);
         
+        // Remove focus ring when closing menus so you can safely seek again
         if (currentEl) {
           currentEl.classList.remove('movitv-focused');
           currentEl = null;
         }
       }
+    }
+    // Channel Up (427 / 33) -> Jump straight to Search bar
+    else if (code === 427 || code === 33) {
+      e.preventDefault();
+      var searchInput = document.querySelector('input[name="keyword"], input[type="text"][placeholder*="earch" i], a[href*="search"]');
+      if (searchInput) setFocus(searchInput);
     }
     else if (code === 415 || code === 19 || code === 10252) {
       var v2 = getActiveVideo();
@@ -288,12 +280,8 @@
 
   attachListeners(document);
   
-  // Background engine loop (handles iframe attaching and auto-saving progress)
   setInterval(function() {
-    // 1. Process Video Save/Restore
     handleVideoResumeAndSave(getActiveVideo());
-
-    // 2. Attach controls to new iframes
     var frames = document.querySelectorAll('iframe');
     for (var i = 0; i < frames.length; i++) {
       try {
