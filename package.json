@@ -1,7 +1,7 @@
 {
   "name": "movysx-tizenbrew",
-  "version": "1.0.0",
-  "description": "Netflix-style D-pad navigation mod for movy.sx on TizenBrew",
+  "version": "1.1.0",
+  "description": "Netflix-style D-pad navigation mod for Movie site on TizenBrew",
   "packageType": "mods",
   "appName": "Movies & TV",
   "websiteURL": "https://movy.sx",
