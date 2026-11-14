@@ -1,0 +1,16 @@
+{
+  "name": "movysx-tizenbrew",
+  "version": "1.0.0",
+  "description": "Netflix-style D-pad navigation mod for movy.sx on TizenBrew",
+  "packageType": "mods",
+  "appName": "Movies & TV",
+  "websiteURL": "https://movy.sx",
+  "main": "index.js",
+  "keys": [
+    "MediaPlayPause",
+    "MediaPlay",
+    "MediaPause",
+    "MediaFastForward",
+    "MediaRewind"
+  ]
+}
