@@ -253,15 +253,21 @@
     }
   }
 
+  // --- NEW: Added the 60ms delay shock absorber ---
+  var keyupTimers = {};
+
   function keyupHandler(e) {
     var code = e.keyCode;
     
-    // Stop cursor movement
+    // Stop cursor movement with a 60ms delay to ignore TV signal "stutter"
     if (code >= 37 && code <= 40) {
-      keys[code] = false;
+      clearTimeout(keyupTimers[code]);
+      keyupTimers[code] = setTimeout(function() {
+        keys[code] = false;
+      }, 60);
     }
 
-    // Stop seeking
+    // Stop seeking (Video Mode)
     if (!cursorVisible && (code === 37 || code === 39)) {
       if (activeKey === code) {
         activeKey = null;
