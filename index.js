@@ -34,6 +34,7 @@
   var seekTimer = null;
   var seekLoop = null;
   var seekData = { active: false, speed: 1, direction: 1, video: null };
+  var restoredVideos = new WeakMap();
 
   // 3. Helper to find the video element, even inside iframes
   function getActiveVideo() {
@@ -49,12 +50,54 @@
     return null;
   }
 
-  // Determines if the user is actually watching a video vs navigating the UI
   function isVideoFocusMode(v) {
     if (!v) return false;
     if (document.fullscreenElement) return true;
     var rect = v.getBoundingClientRect();
     return (rect.height > window.innerHeight * 0.4);
+  }
+
+  // Auto-Resume System
+  function getVideoKey() {
+    try {
+      return 'movytv_time_' + window.top.location.pathname;
+    } catch (e) {
+      return 'movytv_time_' + window.location.pathname;
+    }
+  }
+
+  function handleVideoResumeAndSave(vid) {
+    if (!vid) return;
+    var key = getVideoKey();
+
+    // Check if we need to restore
+    if (!restoredVideos.has(vid)) {
+      restoredVideos.set(vid, true);
+      try {
+        var saved = localStorage.getItem(key);
+        if (saved) {
+          var t = parseFloat(saved);
+          if (t > 15) {
+            var attemptRestore = function() {
+              if (vid.duration && t < vid.duration - 30) {
+                vid.currentTime = t;
+              }
+            };
+            if (vid.readyState >= 1) attemptRestore();
+            else vid.addEventListener('loadedmetadata', attemptRestore);
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Save current progress
+    try {
+      if (!vid.paused && vid.currentTime > 15) {
+        if (!vid.duration || vid.currentTime < vid.duration - 30) {
+          localStorage.setItem(key, vid.currentTime);
+        }
+      }
+    } catch (e) {}
   }
 
   // 4. Smooth Fast-Forward Engine
@@ -66,11 +109,8 @@
       if (!seekData.active) return;
       var dt = (time - lastTime) / 1000;
       lastTime = time;
-      
-      // Accelerate speed: start at 2x, smoothly ramp up to 30x
       seekData.speed = Math.min(seekData.speed + (dt * 12), 30);
       seekData.video.currentTime += seekData.direction * seekData.speed * dt;
-      
       seekLoop = requestAnimationFrame(loop);
     }
     seekLoop = requestAnimationFrame(loop);
@@ -83,10 +123,10 @@
     seekData.speed = 1;
   }
 
-  // 5. Find focusable elements
+  // 5. Find focusable elements (Added episode, nav, and generic button classes)
   function getFocusableElements() {
     var candidates = document.querySelectorAll(
-      'a[href], button, input, select, [role="button"], [tabindex]:not([tabindex="-1"]), .film-poster, .movie-item'
+      'a[href], button, input, select, [role="button"], [tabindex]:not([tabindex="-1"]), .film-poster, .movie-item, .btn, .nav-link, .nav-item, .episode-item, .ep-item, .ss-item, [data-toggle], [data-id], .plyr__control, .jw-button, .vjs-button, .vjs-control'
     );
     var visible = [];
     for (var i = 0; i < candidates.length; i++) {
@@ -108,7 +148,7 @@
     currentEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
   }
 
-  // 6. Spatial navigation math
+  // 6. Spatial navigation math (Adjusted multiplier to make reaching bottom-middle easier)
   function moveFocus(direction) {
     var elements = getFocusableElements();
     if (!elements.length) return;
@@ -138,7 +178,9 @@
       else if (direction === 'down' && dy > 10) { inDirection = true; primaryDist = Math.abs(dy); secondaryDist = Math.abs(dx); }
 
       if (!inDirection) continue;
-      var score = primaryDist + secondaryDist * 2.5;
+      
+      // Reduced secondary multiplier from 2.5 to 1.2 so it doesn't overly penalize diagonal items (like bottom middle buttons)
+      var score = primaryDist + secondaryDist * 1.2;
       if (score < bestScore) { bestScore = score; bestEl = targetEl; }
     }
     if (bestEl) setFocus(bestEl);
@@ -148,12 +190,22 @@
   function keydownHandler(e) {
     var code = e.keyCode;
 
-    // LEFT (37) and RIGHT (39)
+    if (currentEl) {
+      var rect = currentEl.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || currentEl.offsetParent === null) {
+        currentEl.classList.remove('movitv-focused');
+        currentEl = null;
+      } else if (document.fullscreenElement && !document.fullscreenElement.contains(currentEl)) {
+        currentEl.classList.remove('movitv-focused');
+        currentEl = null;
+      }
+    }
+
     if (code === 37 || code === 39) {
       var video = getActiveVideo();
+      var isUIFocused = currentEl && currentEl.tagName.toLowerCase() !== 'video' && currentEl.tagName.toLowerCase() !== 'body';
       
-      // If we are watching a video, hijack left/right for seeking
-      if (isVideoFocusMode(video)) {
+      if (isVideoFocusMode(video) && !isUIFocused) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -163,30 +215,26 @@
           seekData.video = video;
           seekData.direction = (code === 37) ? -1 : 1;
           seekData.speed = 2;
-          seekTimer = setTimeout(startSeek, 1300); // 1.3s threshold
+          seekTimer = setTimeout(startSeek, 1300);
         }
         return; 
       }
 
-      // If no video is active, navigate the UI normally
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       moveFocus(code === 37 ? 'left' : 'right');
     }
-    // UP (38) and DOWN (40)
     else if (code === 38 || code === 40) {
       e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
       moveFocus(code === 38 ? 'up' : 'down');
     }
-    // ENTER (13)
     else if (code === 13) {
       if (currentEl && document.activeElement !== currentEl) {
         e.preventDefault();
         currentEl.click();
       }
     }
-    // BACK (10009)
     else if (code === 10009) {
       e.preventDefault(); e.stopPropagation();
       var now = Date.now();
@@ -196,31 +244,13 @@
         lastBackPress = now;
         var escEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true });
         document.dispatchEvent(escEvent);
-      }
-    }
-    // CH UP (427 / 33) -> Jump to Search
-    else if (code === 427 || code === 33) {
-      e.preventDefault();
-      var searchInput = document.querySelector('input[name="keyword"], input[type="text"][placeholder*="earch" i], a[href*="search"]');
-      if (searchInput) setFocus(searchInput);
-    }
-    // CH DOWN (428 / 34) -> Toggle Fullscreen
-    else if (code === 428 || code === 34) {
-      e.preventDefault();
-      var vid = getActiveVideo();
-      if (vid) {
-        // Fullscreen the container (so subtitles and controls stay visible), not just the raw video feed
-        var container = vid.closest('.jwplayer, .plyr, .html5-video-player, iframe') || vid;
-        if (!document.fullscreenElement) {
-          if (container.requestFullscreen) container.requestFullscreen();
-          else if (container.webkitRequestFullscreen) container.webkitRequestFullscreen();
-        } else {
-          if (document.exitFullscreen) document.exitFullscreen();
-          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        
+        if (currentEl) {
+          currentEl.classList.remove('movitv-focused');
+          currentEl = null;
         }
       }
     }
-    // PLAY/PAUSE/REW/FF
     else if (code === 415 || code === 19 || code === 10252) {
       var v2 = getActiveVideo();
       if (v2) {
@@ -233,16 +263,14 @@
 
   function keyupHandler(e) {
     var code = e.keyCode;
-    // Release hold for Left/Right
     if (code === 37 || code === 39) {
       if (activeKey === code) {
         activeKey = null;
         clearTimeout(seekTimer);
         
         if (seekData.active) {
-          stopSeek(); // Was holding, stop the fast-forward
+          stopSeek();
         } else if (seekData.video) {
-          // Was just a quick tap (< 1.3s), trigger standard 10s skip
           seekData.video.currentTime += (code === 37 ? -10 : 10);
         }
         
@@ -253,17 +281,19 @@
     }
   }
 
-  // 8. Event Listener Attachment Engine
   function attachListeners(doc) {
     doc.addEventListener('keydown', keydownHandler, true);
     doc.addEventListener('keyup', keyupHandler, true);
   }
 
-  // Attach to top document
   attachListeners(document);
   
-  // Continually probe for new iframes and attach to them so we don't lose control
+  // Background engine loop (handles iframe attaching and auto-saving progress)
   setInterval(function() {
+    // 1. Process Video Save/Restore
+    handleVideoResumeAndSave(getActiveVideo());
+
+    // 2. Attach controls to new iframes
     var frames = document.querySelectorAll('iframe');
     for (var i = 0; i < frames.length; i++) {
       try {
@@ -271,11 +301,10 @@
           attachListeners(frames[i].contentDocument);
           frames[i].__movyTVAttached = true;
         }
-      } catch (err) {} // Ignore cross-origin frames we can't access
+      } catch (err) {} 
     }
   }, 2000);
 
-  // 9. Initial Auto-Focus
   setTimeout(function () {
     var initial = getFocusableElements();
     if (initial.length) setFocus(initial[0]);
