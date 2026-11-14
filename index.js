@@ -2,164 +2,301 @@
   if (window.__movysxTVInitialized) return;
   window.__movysxTVInitialized = true;
 
-  // 1. Block ad popups / new tab redirects
   window.open = function () {
     console.log('[MovyTV] Blocked popup');
     return null;
   };
 
-  // 2. Inject Netflix-style TV UI & Focus Ring CSS
-  var style = document.createElement('style');
-  style.textContent = [
-    'html, body { scroll-behavior: smooth !important; overflow-x: hidden !important; }',
-    '::-webkit-scrollbar { display: none !important; }',
-    '.movitv-focused {',
-    '  outline: 4px solid #E50914 !important;',
-    '  outline-offset: 4px !important;',
-    '  box-shadow: 0 0 24px rgba(229, 9, 20, 0.85) !important;',
-    '  transform: scale(1.06) !important;',
-    '  transition: transform 0.15s ease, box-shadow 0.15s ease !important;',
-    '  z-index: 9999 !important;',
-    '  position: relative !important;',
-    '  border-radius: 6px !important;',
-    '}'
-  ].join('\n');
-  (document.head || document.documentElement).appendChild(style);
+  // 1. Create the Virtual Cursor
+  var cursor = document.createElement('div');
+  cursor.id = 'movytv-cursor';
+  cursor.style.cssText = 'position:fixed; z-index:2147483647; width:22px; height:22px; background-color:rgba(229, 9, 20, 0.95); border:3px solid white; border-radius:50%; pointer-events:none; top:50%; left:50%; transform:translate(-50%, -50%); transition: opacity 0.2s, transform 0.1s; box-shadow: 0 0 10px rgba(0,0,0,0.5);';
+  document.body.appendChild(cursor);
 
-  var currentEl = null;
+  var cursorX = window.innerWidth / 2;
+  var cursorY = window.innerHeight / 2;
+  var cursorVisible = true;
+  var wasWatchingVideo = false;
 
-  // 3. Find all visible clickable elements (posters, links, buttons, inputs)
-  function getFocusableElements() {
-    var candidates = document.querySelectorAll(
-      'a[href], button, input, select, [role="button"], [tabindex]:not([tabindex="-1"]), .film-poster, .movie-item'
-    );
-    var visible = [];
-    for (var i = 0; i < candidates.length; i++) {
-      var el = candidates[i];
-      if (el.offsetParent === null || el.disabled) continue;
-      var rect = el.getBoundingClientRect();
-      if (rect.width < 10 || rect.height < 10) continue;
-      visible.push(el);
-    }
-    return visible;
-  }
+  var keys = { 37: false, 38: false, 39: false, 40: false };
+  var currentSpeed = 6;
+  var maxSpeed = 22;
+  var lastBackPress = 0;
 
-  function setFocus(el) {
-    if (!el) return;
-    if (currentEl) {
-      currentEl.classList.remove('movitv-focused');
-    }
-    currentEl = el;
-    currentEl.classList.add('movitv-focused');
-    currentEl.focus({ preventScroll: true });
-    currentEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-  }
-
-  // 4. Spatial navigation math (nearest element in D-pad direction)
-  function moveFocus(direction) {
-    var elements = getFocusableElements();
-    if (!elements.length) return;
-
-    if (!currentEl || !document.body.contains(currentEl)) {
-      setFocus(elements[0]);
-      return;
-    }
-
-    var src = currentEl.getBoundingClientRect();
-    var srcX = src.left + src.width / 2;
-    var srcY = src.top + src.height / 2;
-
-    var bestEl = null;
-    var bestScore = Infinity;
-
-    for (var i = 0; i < elements.length; i++) {
-      var targetEl = elements[i];
-      if (targetEl === currentEl) continue;
-
-      var dst = targetEl.getBoundingClientRect();
-      var dstX = dst.left + dst.width / 2;
-      var dstY = dst.top + dst.height / 2;
-
-      var dx = dstX - srcX;
-      var dy = dstY - srcY;
-
-      var inDirection = false;
-      var primaryDist = 0;
-      var secondaryDist = 0;
-
-      if (direction === 'left' && dx < -10) {
-        inDirection = true;
-        primaryDist = Math.abs(dx);
-        secondaryDist = Math.abs(dy);
-      } else if (direction === 'right' && dx > 10) {
-        inDirection = true;
-        primaryDist = Math.abs(dx);
-        secondaryDist = Math.abs(dy);
-      } else if (direction === 'up' && dy < -10) {
-        inDirection = true;
-        primaryDist = Math.abs(dy);
-        secondaryDist = Math.abs(dx);
-      } else if (direction === 'down' && dy > 10) {
-        inDirection = true;
-        primaryDist = Math.abs(dy);
-        secondaryDist = Math.abs(dx);
+  // 2. Cursor Movement & Page Scrolling Engine
+  function updateCursor() {
+    if (cursorVisible) {
+      var isMoving = keys[37] || keys[38] || keys[39] || keys[40];
+      
+      // Accelerate while holding a direction
+      if (isMoving) {
+        currentSpeed = Math.min(currentSpeed + 0.5, maxSpeed);
+      } else {
+        currentSpeed = 6;
       }
 
-      if (!inDirection) continue;
+      if (keys[37]) cursorX -= currentSpeed;
+      if (keys[39]) cursorX += currentSpeed;
+      if (keys[38]) cursorY -= currentSpeed;
+      if (keys[40]) cursorY += currentSpeed;
 
-      var score = primaryDist + secondaryDist * 2.5;
-      if (score < bestScore) {
-        bestScore = score;
-        bestEl = targetEl;
-      }
-    }
+      // Keep cursor inside screen bounds
+      cursorX = Math.max(0, Math.min(window.innerWidth, cursorX));
+      cursorY = Math.max(0, Math.min(window.innerHeight, cursorY));
+      
+      cursor.style.left = cursorX + 'px';
+      cursor.style.top = cursorY + 'px';
 
-    if (bestEl) {
-      setFocus(bestEl);
+      // Edge Scrolling (push cursor against the edge to scroll the page)
+      var scrollEdge = 40;
+      if (cursorX < scrollEdge) window.scrollBy(-12, 0);
+      if (cursorX > window.innerWidth - scrollEdge) window.scrollBy(12, 0);
+      if (cursorY < scrollEdge) window.scrollBy(0, -12);
+      if (cursorY > window.innerHeight - scrollEdge) window.scrollBy(0, 12);
     }
+    requestAnimationFrame(updateCursor);
+  }
+  requestAnimationFrame(updateCursor);
+
+  // 3. Video Seeking Engine
+  var activeKey = null;
+  var seekTimer = null;
+  var seekLoop = null;
+  var seekData = { active: false, speed: 1, direction: 1, video: null };
+
+  function getActiveVideo() {
+    var v = document.querySelector('video');
+    if (v) return v;
+    var frames = document.querySelectorAll('iframe');
+    for (var i = 0; i < frames.length; i++) {
+      try {
+        v = frames[i].contentDocument.querySelector('video');
+        if (v) return v;
+      } catch (e) {}
+    }
+    return null;
   }
 
-  // 5. Samsung TV Remote Key Handler
-  document.addEventListener(
-    'keydown',
-    function (e) {
-      var code = e.keyCode;
+  function isVideoFocusMode(v) {
+    if (!v) return false;
+    if (document.fullscreenElement) return true;
+    var rect = v.getBoundingClientRect();
+    return (rect.height > window.innerHeight * 0.4);
+  }
 
-      if (code === 37) {
-        e.preventDefault();
-        moveFocus('left');
-      } else if (code === 38) {
-        e.preventDefault();
-        moveFocus('up');
-      } else if (code === 39) {
-        e.preventDefault();
-        moveFocus('right');
-      } else if (code === 40) {
-        e.preventDefault();
-        moveFocus('down');
-      } else if (code === 13) {
-        if (currentEl && document.activeElement !== currentEl) {
-          e.preventDefault();
-          currentEl.click();
+  function startSeek() {
+    if (!seekData.video) return;
+    seekData.active = true;
+    var lastTime = performance.now();
+    function loop(time) {
+      if (!seekData.active) return;
+      var dt = (time - lastTime) / 1000;
+      lastTime = time;
+      seekData.speed = Math.min(seekData.speed + (dt * 12), 30);
+      seekData.video.currentTime += seekData.direction * seekData.speed * dt;
+      seekLoop = requestAnimationFrame(loop);
+    }
+    seekLoop = requestAnimationFrame(loop);
+  }
+
+  function stopSeek() {
+    seekData.active = false;
+    if (seekLoop) cancelAnimationFrame(seekLoop);
+    seekLoop = null;
+    seekData.speed = 1;
+  }
+
+  // 4. Video Auto-Resume Saving
+  var restoredVideos = new WeakMap();
+  function getVideoKey() {
+    try { return 'movytv_time_' + window.top.location.pathname; }
+    catch (e) { return 'movytv_time_' + window.location.pathname; }
+  }
+
+  function handleVideoBackgroundTasks() {
+    var v = getActiveVideo();
+    var currentlyWatching = isVideoFocusMode(v);
+
+    // Auto-Hide/Show Cursor when transitioning into/out of videos
+    if (currentlyWatching && !wasWatchingVideo) {
+      wasWatchingVideo = true;
+      cursorVisible = false;
+      cursor.style.opacity = '0';
+      keys[37] = keys[38] = keys[39] = keys[40] = false; // Reset movement
+    } else if (!currentlyWatching && wasWatchingVideo) {
+      wasWatchingVideo = false;
+      cursorVisible = true;
+      cursor.style.opacity = '1';
+    }
+
+    // Auto-Resume Save Logic
+    if (!v) return;
+    var key = getVideoKey();
+    if (!restoredVideos.has(v)) {
+      restoredVideos.set(v, true);
+      try {
+        var saved = localStorage.getItem(key);
+        if (saved) {
+          var t = parseFloat(saved);
+          if (t > 15) {
+            var attemptRestore = function() { if (v.duration && t < v.duration - 30) v.currentTime = t; };
+            if (v.readyState >= 1) attemptRestore();
+            else v.addEventListener('loadedmetadata', attemptRestore);
+          }
         }
-      } else if (code === 10009) {
+      } catch (e) {}
+    }
+    
+    try {
+      if (!v.paused && v.currentTime > 15) {
+        if (!v.duration || v.currentTime < v.duration - 30) localStorage.setItem(key, v.currentTime);
+      }
+    } catch (e) {}
+  }
+  setInterval(handleVideoBackgroundTasks, 1500);
+
+  // 5. Input Handlers
+  function keydownHandler(e) {
+    if (document.hidden || window.innerWidth === 0 || document.body.clientWidth === 0) return; 
+
+    var code = e.keyCode;
+    var video = getActiveVideo();
+    var inVideo = isVideoFocusMode(video);
+
+    // Left (37), Up (38), Right (39), Down (40)
+    if (code >= 37 && code <= 40) {
+      
+      // If watching video AND cursor is hidden, hijack Left/Right for seeking
+      if (inVideo && !cursorVisible && (code === 37 || code === 39)) {
         e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        if (activeKey !== code) {
+          activeKey = code;
+          seekData.video = video;
+          seekData.direction = (code === 37) ? -1 : 1;
+          seekData.speed = 2;
+          seekTimer = setTimeout(startSeek, 1300);
+        }
+        return;
+      }
+
+      // Otherwise, move the cursor
+      if (cursorVisible) {
+        e.preventDefault();
+        keys[code] = true;
+      }
+    } 
+    // ENTER (13) -> Simulate Mouse Click
+    else if (code === 13) {
+      if (cursorVisible) {
+        e.preventDefault();
+        
+        // Visual click feedback
+        cursor.style.transform = 'translate(-50%, -50%) scale(0.6)';
+        setTimeout(function() { cursor.style.transform = 'translate(-50%, -50%) scale(1)'; }, 150);
+
+        // Find element under cursor and click it
+        var target = document.elementFromPoint(cursorX, cursorY);
+        
+        // If clicking inside an iframe (like the video player controls)
+        if (target && target.tagName.toLowerCase() === 'iframe') {
+          try {
+            var rect = target.getBoundingClientRect();
+            target = target.contentDocument.elementFromPoint(cursorX - rect.left, cursorY - rect.top);
+          } catch (err) {}
+        }
+
+        if (target) {
+          target.focus();
+          target.click();
+        }
+      }
+    } 
+    // BACK (10009)
+    else if (code === 10009) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      var now = Date.now();
+      
+      // Double tap to leave the page
+      if (now - lastBackPress < 1200) {
         window.history.back();
-      } else if (code === 415 || code === 19 || code === 10252) {
-        var video = document.querySelector('video');
-        if (video) {
-          e.preventDefault();
-          if (video.paused) video.play();
-          else video.pause();
+      } 
+      // Single tap logic
+      else {
+        lastBackPress = now;
+        
+        if (inVideo) {
+          // Toggle cursor visibility inside the video player
+          cursorVisible = !cursorVisible;
+          cursor.style.opacity = cursorVisible ? '1' : '0';
+          
+          if (!cursorVisible) {
+            // Close player menus when hiding cursor
+            var escEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true });
+            document.dispatchEvent(escEvent);
+            keys[37] = keys[38] = keys[39] = keys[40] = false; // Stop drifting
+          }
         }
       }
-    },
-    true
-  );
+    }
+    // PLAY/PAUSE (415)
+    else if (code === 415 || code === 19 || code === 10252) {
+      if (video) {
+        e.preventDefault();
+        if (video.paused) video.play();
+        else video.pause();
+      }
+    }
+  }
 
-  // 6. Auto-focus first element once page loads
-  setTimeout(function () {
-    var initial = getFocusableElements();
-    if (initial.length) setFocus(initial[0]);
-  }, 1500);
+  function keyupHandler(e) {
+    var code = e.keyCode;
+    
+    // Stop cursor movement
+    if (code >= 37 && code <= 40) {
+      keys[code] = false;
+    }
+
+    // Stop seeking
+    if (!cursorVisible && (code === 37 || code === 39)) {
+      if (activeKey === code) {
+        activeKey = null;
+        clearTimeout(seekTimer);
+        
+        if (seekData.active) {
+          stopSeek();
+        } else if (seekData.video) {
+          seekData.video.currentTime += (code === 37 ? -10 : 10);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    }
+  }
+
+  // 6. Listener Attachment Engine
+  function attachListeners(doc) {
+    doc.addEventListener('keydown', keydownHandler, true);
+    doc.addEventListener('keyup', keyupHandler, true);
+  }
+
+  attachListeners(document);
+  
+  setInterval(function() {
+    var frames = document.querySelectorAll('iframe');
+    for (var i = 0; i < frames.length; i++) {
+      try {
+        if (!frames[i].__movyTVAttached && frames[i].contentDocument) {
+          attachListeners(frames[i].contentDocument);
+          frames[i].__movyTVAttached = true;
+        }
+      } catch (err) {} 
+    }
+  }, 2000);
+
 })();
